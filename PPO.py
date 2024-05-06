@@ -183,10 +183,10 @@ class PPO:
                 self.critic_optimizer.step()
 
     def save(self, env, episode):
-        torch.save(self.critic.state_dict(), f'./weights/ppo_critic-{env}-{episode}')
-        torch.save(self.actor.state_dict(), f'./weights/ppo_actor-{env}-{episode}')
+        torch.save(self.critic.state_dict(), f'./checkpoints/ppo_critic-{env}-{episode}')
+        torch.save(self.actor.state_dict(), f'./checkpoints/ppo_actor-{env}-{episode}')
 
     def load(self, env, episode):
-        self.critic.load_state_dict(torch.load(f'./weights/ppo_critic-{env}-{episode}'))
-        self.actor.load_state_dict(torch.load(f'./weights/ppo_actor-{env}-{episode}'))
+        self.critic.load_state_dict(torch.load(f'./checkpoints/ppo_critic-{env}-{episode}'))
+        self.actor.load_state_dict(torch.load(f'./checkpoints/ppo_actor-{env}-{episode}'))
 

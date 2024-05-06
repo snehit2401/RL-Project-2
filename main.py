@@ -87,7 +87,11 @@ def main(args):
 
     env = gym.make(args.env, render_mode = "human" if args.render else None)
     eval_env = gym.make(args.env)
-    
+
+    # print(f'env.observation_space: {env.observation_space}')
+    # print(f'env.action_space: {env.action_space}')
+    # print(f'env.action_space.n: {env.action_space.n}')
+    # print(f'env._max_episode_steps: {env._max_episode_steps}')
 
     args.state_dim = env.observation_space.shape[0]
     args.action_dim = env.action_space.n
@@ -124,7 +128,7 @@ def main(args):
             "T_horizon": args.T_horizon,
             "K_epochs": args.K_epochs,
             "gamma": args.gamma,
-            "lambda": args.lambd,
+            "lambd": args.lambd,
             "epsilon": args.epsilon,
             "hidden_size": args.hidden_size,
             "lr": args.lr,
