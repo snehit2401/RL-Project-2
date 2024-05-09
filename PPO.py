@@ -12,34 +12,77 @@ from torch.distributions import Categorical
 
 
 class Actor(nn.Module):
-    def __init__(self, state_dim, action_dim, hidden_size):
+    def __init__(self, state_dim, action_dim, hidden_size, continuous=False, action_std_init=0.6, device=torch.device('cuda')):
         super().__init__()
+        
+        self.continuous = continuous
+        self.device = device
+
+        if self.continuous:
+            self.action_dim = aciton_dim
+            self.action_var = torch.full((self.action_dim,), action_std_init * action_std_init).to(self.device) 
 
         self.l1 = nn.Linear(state_dim, hidden_size)
+        # self.norm1 = nn.BatchNorm1d(hidden_size)
+        # self.norm1 = nn.InstanceNorm1d(hidden_size)
+
         self.l2 = nn.Linear(hidden_size, hidden_size)
+        # self.norm2 = nn.BatchNorm1d(hidden_size)
+        # self.norm2 = nn.InstanceNorm1d(hidden_size)
+
         self.l3 = nn.Linear(hidden_size, action_dim)
 
+    def set_action_std(self, new_action_std):
+        self.action_var = torch.full((self.action_dim,), new_action_std * new_action_std).to(self.device)
+
     def forward(self, state, softmax_dim = 0):
-        x = torch.tanh(self.l1(state))
-        x = torch.tanh(self.l2(x))
+        # if len(state.shape) == 1:
+        #     state = state.unsqueeze(0)
+        #     # state = state[None, :]
 
-        prob = F.softmax(self.l3(x), dim=softmax_dim)
-        return prob
-
+        x = F.tanh(self.l1(state))
+        # x = F.tanh(self.l1(state) if len(state.shape) == 1 else self.norm1(self.l1(state)))
+        # x = F.tanh(self.norm1(self.l1(state).unsqueeze(dim=0)).squeeze(dim=0) if len(state.shape) == 1 else self.norm1(self.l1(state)))
+        
+        x = F.tanh(self.l2(x))
+        # x = F.tanh(self.l2(x) if len(x.shape) == 1 else self.norm2(self.l2(x)))
+        # x = F.tanh(self.norm2(self.l2(x).unsqueeze(dim=0)).squeeze(dim=0) if len(x.shape) == 1 else self.norm2(self.l2(x)))
+        
+        if self.continuous:
+            x = F.tanh(self.l3(x))
+        else:
+            x = F.softmax(self.l3(x), dim=softmax_dim)
+        
+        return x 
 
 class Critic(nn.Module):
     def __init__(self, state_dim, hidden_size):
         super().__init__()
 
-        self.C1 = nn.Linear(state_dim, hidden_size)
-        self.C2 = nn.Linear(hidden_size, hidden_size)
-        self.C3 = nn.Linear(hidden_size, 1)
+        self.l1 = nn.Linear(state_dim, hidden_size)
+        # self.norm1 = nn.BatchNorm1d(hidden_size)
+        # self.norm1 = nn.InstanceNorm1d(hidden_size)
+
+        self.l2 = nn.Linear(hidden_size, hidden_size)
+        # self.norm2 = nn.BatchNorm1d(hidden_size)
+        # self.norm2 = nn.InstanceNorm1d(hidden_size)
+
+        self.l3 = nn.Linear(hidden_size, 1)
 
     def forward(self, state):
-        v = torch.relu(self.C1(state))
-        v = torch.relu(self.C2(v))
+        # if len(state.shape) == 1:
+        #     state = state.unsqueeze(0)
+        #     # state = state[None, :]
+        
+        x = F.relu(self.l1(state))
+        # x = F.relu(self.l1(state) if len(state.shape) == 1 else self.norm1(self.l1(state)))
+        # x = F.relu(self.norm1(self.l1(state).unsqueeze(dim=0)).squeeze(dim=0) if len(state.shape) == 1 else self.norm1(self.l1(state)))
 
-        v = self.C3(v)
+        x = F.relu(self.l2(x))
+        # x = F.relu(self.l2(x) if len(x.shape) == 1 else self.norm2(self.l2(x)))
+        # x = F.relu(self.norm2(self.l2(x).unsqueeze(dim=0)).squeeze(dim=0) if len(x.shape) == 1 else self.norm2(self.l2(x)))
+
+        v = self.l3(x)
         return v
 
 
@@ -48,7 +91,7 @@ class PPO:
         self.__dict__.update(kwargs)
 
         # A2C Network
-        self.actor = Actor(self.state_dim, self.action_dim, self.hidden_size).to(self.device)
+        self.actor = Actor(self.state_dim, self.action_dim, self.hidden_size, self.continuous, self.action_std_init, self.device).to(self.device)
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=self.lr)
 
         self.critic = Critic(self.state_dim, self.hidden_size).to(self.device)
@@ -59,37 +102,104 @@ class PPO:
         self.obs = np.zeros((self.T_horizon, self.state_dim), dtype=np.float32)
 
         self.action = np.zeros((self.T_horizon, 1), dtype=np.int64)
-        self.action_logprob = np.zeros((self.T_horizon, 1), dtype=np.float32)
+        # self.action_logprob = np.zeros((self.T_horizon, 1), dtype=np.float32)
+        self.action_old_prob = np.zeros((self.T_horizon, 1), dtype=np.float32)
 
         self.reward = np.zeros((self.T_horizon, 1), dtype=np.float32)
         self.done = np.zeros((self.T_horizon, 1), dtype=np.bool_)
         self.end = np.zeros((self.T_horizon, 1), dtype=np.bool_)
+        
+        if self.continuous:
+            self.action_std = self.action_std_init
+
+
+    def set_action_std(self, new_action_std):
+        self.action_std = new_action_std
+        self.actor.set_action_std(new_action_std)
+
+
+    def decay_action_std(self, action_std_decay_rate, min_action_std):
+        self.action_std = self.action_std - action_std_decay_rate
+        self.action_std = round(self.action_std, 4)
+
+        if (self.action_std <= min_action_std):
+            self.action_std = min_action_std
+
+        self.set_action_std(self.action_std)
 
 
     def select_action(self, state, deterministic=True):
         state = torch.from_numpy(state).float().to(self.device)
 
         with torch.no_grad():
-            pi = self.actor(state, softmax_dim=0)
+            if self.continuous:
+                action_mean = self.actor(state)
+                
+                # if deterministic:
+                #     return action_mean, None
+                
+                cov_mat = torch.diag(self.actor.action_var).unsqueeze(dim=0)
+                dist = MultivariateNormal(action_mean, cov_mat)
 
-            if deterministic:
-                action = torch.argmax(pi).item()
-                return action, None
             else:
-                m = Categorical(pi)
-                action = m.sample().item()
+                prob = self.actor(state, softmax_dim=0)
 
-                pi_action = pi[action].item()
-                return action, pi_action
+                if deterministic:
+                    action = torch.argmax(prob).item()
+                    return action, None
+
+                dist = Categorical(prob)
+
+            action = dist.sample()
+
+            # action_logprob = dist.log_prob(action)
+            action_prob = prob[action]
+
+            # state_val = self.critic(state)
+
+        # return action.item(), action_logprob.item()     #, state_val.item()
+        return action.item(), action_prob.item()        #, state_val.item()
 
 
-    def store_transition(self, state, action, reward, obs, action_logprob, done, end, idx):
+    def evaluate(self, state, action):
+        if self.continuous:
+            action_mean = self.actor(state)
+            
+            action_var = self.action_var.expand_as(action_mean)
+            cov_mat = torch.diag_embed(action_var).to(device)
+            dist = MultivariateNormal(action_mean, cov_mat)
+
+            # For Single Action Environments.
+            if self.action_dim == 1:
+                action = action.reshape(-1, self.action_dim)
+
+        else:
+            prob = self.actor(state)
+            dist = Categorical(prob)
+
+        # action_logprob = dist.log_prob(action)
+        # action_prob = torch.exp(action_logprob)
+        # action_prob = prob[action]
+        action_prob = prob.gather(1, action)
+
+        # dist_entropy = dist.entropy()
+        dist_entropy = dist.entropy().sum(0, keepdim=True)
+
+        # state_value = self.critic(state)
+
+        # return action_logprob, dist_entropy     #, state_value
+        return action_prob, dist_entropy        #, state_value
+
+
+    # def store_transition(self, state, action, reward, obs, action_logprob, done, end, idx):
+    def store_transition(self, state, action, reward, obs, action_old_prob, done, end, idx):
         self.state[idx] = state
         self.action[idx] = action
         self.reward[idx] = reward
         self.obs[idx] = obs
 
-        self.action_logprob[idx] = action_logprob
+        # self.action_logprob[idx] = action_logprob
+        self.action_old_prob[idx] = action_old_prob
         self.done[idx] = done
         self.end[idx] = end
    
@@ -103,7 +213,8 @@ class PPO:
         obs = torch.from_numpy(self.obs).to(self.device)
 
         action = torch.from_numpy(self.action).to(self.device)
-        action_logprob = torch.from_numpy(self.action_logprob).to(self.device)
+        # action_logprob = torch.from_numpy(self.action_logprob).to(self.device)
+        action_old_prob = torch.from_numpy(self.action_old_prob).to(self.device)
 
         reward = torch.from_numpy(self.reward).to(self.device)
         done = torch.from_numpy(self.done).to(self.device)
@@ -113,7 +224,7 @@ class PPO:
         with torch.no_grad():
             value_state = self.critic(state)
             value_obs = self.critic(obs)
-
+            
             deltas = reward + self.gamma * value_obs * (~done) - value_state
             deltas = deltas.cpu().flatten().numpy()
             arr_advantage = [0]
@@ -128,32 +239,35 @@ class PPO:
             advantage = torch.tensor(arr_advantage).unsqueeze(1).float().to(self.device)
 
             td_target = advantage + value_state
+
             # if self.advantage_normalization:
             #     advantage = (advantage - advantage.mean()) / ((advantage.std() + 1e-4))  # sometimes helps
-
+            
 
         ## PPO Update
         num_batch = int(math.ceil(state.shape[0] / self.batch_size)) 
 
         # Slice long trajectopy into short trajectory and perform mini-batch PPO update
-        for _ in range(self.K_epochs):
+        for epoch in range(self.K_epochs):
             # Shuffle the trajectory for better training
             permutation = np.arange(state.shape[0])
             np.random.shuffle(permutation)
             permutation = torch.LongTensor(permutation).to(self.device)
 
-            state, action, td_target, advantage, action_logprob = \
-                state[permutation].clone(), action[permutation].clone(), td_target[permutation].clone(), advantage[permutation].clone(), action_logprob[permutation].clone()
-
+            # state, action, td_target, advantage, action_logprob = \
+            #     state[permutation].clone(), action[permutation].clone(), td_target[permutation].clone(), advantage[permutation].clone(), action_logprob[permutation].clone()
+            state, action, td_target, advantage, action_old_prob = \
+                state[permutation].clone(), action[permutation].clone(), td_target[permutation].clone(), advantage[permutation].clone(), action_old_prob[permutation].clone()
+            
             for i in range(num_batch):
                 # Mini-batch
                 index = slice(i * self.batch_size, min((i + 1) * self.batch_size, state.shape[0]))
-
-                prob = self.actor(state[index], softmax_dim=1)
-                entropy = Categorical(prob).entropy().sum(0, keepdim=True)
-                prob_action = prob.gather(1, action[index])
-                ratio = torch.exp(torch.log(prob_action) - torch.log(action_logprob[index]))  # a/b == exp(log(a)-log(b))
                 
+                action_prob, entropy = self.evaluate(state[index], action[index])
+
+                # ratio = torch.exp(torch.log(prob_action) - action_logprob[index])             
+                ratio = torch.exp(torch.log(action_prob) - torch.log(action_old_prob[index]))  # a/b == exp(log(a)-log(b))
+                    
                 # Clipped surrogate objective
                 surr1 = ratio * advantage[index]
                 surr2 = torch.clamp(ratio, 1 - self.epsilon, 1 + self.epsilon) * advantage[index]
@@ -163,9 +277,9 @@ class PPO:
 
                 actor_loss = -torch.min(surr1, surr2) - self.entropy_coef * entropy
                 actor_loss = actor_loss.mean()
-
+                
                 actor_loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 40)
+                torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 40) # Gradient Clipping
                 self.actor_optimizer.step()
 
                 # Critic Update
@@ -174,19 +288,20 @@ class PPO:
                 critic_loss = (self.critic(state[index]) - td_target[index]).pow(2)
                 critic_loss = critic_loss.mean()
                 
-                # Regularization term
+                # # Regularization term
                 # for name, param in self.critic.named_parameters():
                 #     if 'weight' in name:
                 #         critic_loss += param.pow(2).sum() * self.l2_reg
 
                 critic_loss.backward()
+                # torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 40) # Gradient Clipping  
                 self.critic_optimizer.step()
 
     def save(self, env, episode):
-        torch.save(self.critic.state_dict(), f'./checkpoints/ppo_critic-{env}-{episode}')
-        torch.save(self.actor.state_dict(), f'./checkpoints/ppo_actor-{env}-{episode}')
+        torch.save(self.critic.state_dict(), f'./checkpoints/ppo_critic-{env}-{episode}.pth')
+        torch.save(self.actor.state_dict(), f'./checkpoints/ppo_actor-{env}-{episode}.pth')
 
     def load(self, env, episode):
-        self.critic.load_state_dict(torch.load(f'./checkpoints/ppo_critic-{env}-{episode}'))
-        self.actor.load_state_dict(torch.load(f'./checkpoints/ppo_actor-{env}-{episode}'))
+        self.critic.load_state_dict(torch.load(f'./checkpoints/ppo_critic-{env}-{episode}.pth'))
+        self.actor.load_state_dict(torch.load(f'./checkpoints/ppo_actor-{env}-{episode}.pth'))
 

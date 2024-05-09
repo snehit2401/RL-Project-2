@@ -3,5 +3,5 @@
 **/wandb/
 *.vscode
 
-./checkpoints/
+checkpoints*/
 
