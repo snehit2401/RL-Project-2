@@ -20,7 +20,8 @@ class Actor(nn.Module):
 
         if self.continuous:
             self.action_dim = action_dim
-            self.action_var = torch.full((self.action_dim,), action_std_init * action_std_init).to(self.device) 
+            # self.action_var = torch.full((self.action_dim,), action_std_init * action_std_init).to(self.device) 
+            self.action_var = nn.Parameter(torch.full((self.action_dim,), action_std_init * action_std_init))
 
         self.l1 = nn.Linear(state_dim, hidden_size)
         # self.norm1 = nn.BatchNorm1d(hidden_size)
@@ -32,8 +33,8 @@ class Actor(nn.Module):
 
         self.l3 = nn.Linear(hidden_size, action_dim)
 
-    def set_action_std(self, new_action_std):
-        self.action_var = torch.full((self.action_dim,), new_action_std * new_action_std).to(self.device)
+    # def set_action_std(self, new_action_std):
+    #     self.action_var = torch.full((self.action_dim,), new_action_std * new_action_std).to(self.device)
 
     def forward(self, state, softmax_dim = -1):
         # if len(state.shape) == 1:
@@ -103,23 +104,23 @@ class PPO:
         self.done = np.zeros((self.T_horizon, 1), dtype=np.bool_)
         self.end = np.zeros((self.T_horizon, 1), dtype=np.bool_)
         
-        if self.continuous:
-            self.action_std = self.action_std_init
+        # if self.continuous:
+        #     self.action_std = self.action_std_init
 
 
-    def set_action_std(self, new_action_std):
-        self.action_std = new_action_std
-        self.actor.set_action_std(new_action_std)
+    # def set_action_std(self, new_action_std):
+    #     self.action_std = new_action_std
+    #     self.actor.set_action_std(new_action_std)
 
 
-    def decay_action_std(self, action_std_decay_rate, min_action_std):
-        self.action_std = self.action_std - action_std_decay_rate
-        self.action_std = round(self.action_std, 4)
-
-        if (self.action_std <= min_action_std):
-            self.action_std = min_action_std
-
-        self.set_action_std(self.action_std)
+    # def decay_action_std(self, action_std_decay_rate, min_action_std):
+    #     self.action_std = self.action_std - action_std_decay_rate
+    #     self.action_std = round(self.action_std, 4)
+    #
+    #     if (self.action_std <= min_action_std):
+    #         self.action_std = min_action_std
+    #
+    #     self.set_action_std(self.action_std)
 
 
     def select_action(self, state, deterministic=True):
@@ -153,6 +154,9 @@ class PPO:
                 action = dist.sample()
                 # action_logprob = dist.log_prob(action)
                 action_prob = prob.gather(-1, action)
+                
+                action = action.item()
+                action_prob = action_prob.item()
 
         return action, action_prob
 
@@ -179,8 +183,8 @@ class PPO:
             # action_logprob = dist.log_prob(action)
             action_prob = prob.gather(-1, action)
             
-        dist_entropy = dist.entropy()
-        # dist_entropy = dist.entropy().sum(0, keepdim=True)
+        # dist_entropy = dist.entropy()
+        dist_entropy = dist.entropy().sum(0, keepdim=True)
 
         return action_prob, dist_entropy
 

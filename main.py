@@ -138,9 +138,9 @@ def main(args):
             "entropy_coef_decay": args.entropy_coef_decay,
 
             "action_std_init": args.action_std_init,
-            "action_std_decay_rate": args.action_std_decay_rate, 
-            "min_action_std": args.min_action_std,
-            "action_std_decay_freq": args.action_std_decay_freq,
+            # "action_std_decay_rate": args.action_std_decay_rate, 
+            # "min_action_std": args.min_action_std,
+            # "action_std_decay_freq": args.action_std_decay_freq,
         }
     )
 
@@ -177,8 +177,8 @@ def main(args):
                     model.train(total_steps)
                     traj_length = 0
                 
-                if args.continuous and (total_steps % args.action_std_decay_freq == 0):
-                    model.decay_action_std(args.action_std_decay_rate, args.min_action_std)
+                # if args.continuous and (total_steps % args.action_std_decay_freq == 0):
+                #     model.decay_action_std(args.action_std_decay_rate, args.min_action_std)
 
                 # Evaluate
                 if total_steps % args.eval_step == 0:
@@ -240,9 +240,9 @@ if __name__ == '__main__':
     
     parser.add_argument('--continuous', help='Continuous Action space instead of Discerete', action='store_true')
     parser.add_argument('--action_std_init', type=float, default=0.6, help='starting std for action distribution (Multivariate Normal)')  
-    parser.add_argument('--action_std_decay_rate', type=float, default=0.05, help='linearly decay action_std (action_std = action_std - action_std_decay_rate)')  
-    parser.add_argument('--min_action_std', type=float, default=0.1, help='minimum action_std (stop decay after action_std <= min_action_std)') 
-    parser.add_argument('--action_std_decay_freq', type=float, default=int(2.5e5), help='action_std decay frequency (in num timesteps)') 
+    # parser.add_argument('--action_std_decay_rate', type=float, default=0.05, help='linearly decay action_std (action_std = action_std - action_std_decay_rate)')  
+    # parser.add_argument('--min_action_std', type=float, default=0.1, help='minimum action_std (stop decay after action_std <= min_action_std)') 
+    # parser.add_argument('--action_std_decay_freq', type=float, default=int(2.5e5), help='action_std decay frequency (in num timesteps)') 
 
     parser.add_argument('--hidden_size', type=int, default=64, help='Hidden size')
     parser.add_argument('--lr', type=float, default=1e-4, help='Learning rate')
@@ -251,8 +251,8 @@ if __name__ == '__main__':
     parser.add_argument('--entropy_coef', type=float, default=0, help='Entropy coefficient of Actor')
     parser.add_argument('--entropy_coef_decay', type=float, default=0.99, help='Decay rate of entropy_coef')
 
-    # parser.add_argument('--l2_reg', type=float, default=1e-2, help='L2 regulization coefficient for Critic') # 0, 1e-2
-    # parser.add_argument('--advantage_normalization', help='Advantage normalization', action='store_true')
+    parser.add_argument('--l2_reg', type=float, default=1e-2, help='L2 regulization coefficient for Critic') # 0, 1e-2
+    parser.add_argument('--advantage_normalization', help='Advantage normalization', action='store_true')
 
     args = parser.parse_args()
     
