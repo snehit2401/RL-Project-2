@@ -92,7 +92,7 @@ class PPO(object):
 				return a.cpu().numpy()[0], logprob_a # both are in shape (adim, 0)
 
 
-	def train(self, curr_steps=0):
+	def train(self, total_steps=0, train_steps=0):
 		self.entropy_coef*=self.entropy_coef_decay
 
 		'''Prepare PyTorch data from Numpy data'''
@@ -136,8 +136,10 @@ class PPO(object):
 			perm = torch.LongTensor(perm).to(self.dvc)
 			s, a, td_target, adv, logprob_a = \
 				s[perm].clone(), a[perm].clone(), td_target[perm].clone(), adv[perm].clone(), logprob_a[perm].clone()
-
+			
+			
 			'''update the actor'''
+			actor_steps = train_steps
 			for i in range(a_optim_iter_num):
 				index = slice(i * self.a_optim_batch_size, min((i + 1) * self.a_optim_batch_size, s.shape[0]))
 				distribution = self.actor.get_dist(s[index])
@@ -149,11 +151,15 @@ class PPO(object):
 				surr2 = torch.clamp(ratio, 1 - self.clip_rate, 1 + self.clip_rate) * adv[index]
 				a_loss = -torch.min(surr1, surr2) - self.entropy_coef * dist_entropy
                 
+				# if actor_steps % self.log_interval == 0:
 				wandb.log({
-                    'Actor/loss': a_loss.mean().item(),
-                    'Actor/total_steps': curr_steps,
-                    'Actor/epoch': epoch,
-                })
+					'Actor/loss': a_loss.mean().item(),
+					'Actor/epoch': epoch,
+					'Actor/total_steps': total_steps,
+					'Actor/train_steps': actor_steps // self.log_interval,
+				})
+
+				actor_steps += 1
 
 				self.actor_optimizer.zero_grad()
 				a_loss.mean().backward()
@@ -161,6 +167,7 @@ class PPO(object):
 				self.actor_optimizer.step()
 
 			'''update the critic'''
+			critic_steps = train_steps
 			for i in range(c_optim_iter_num):
 				index = slice(i * self.c_optim_batch_size, min((i + 1) * self.c_optim_batch_size, s.shape[0]))
 				c_loss = (self.critic(s[index]) - td_target[index]).pow(2).mean()
@@ -168,16 +175,23 @@ class PPO(object):
 					if 'weight' in name:
 						c_loss += param.pow(2).sum() * self.l2_reg
 				
-                
+				# if critic_steps % self.log_interval == 0:
 				wandb.log({
-                    'Critic/loss': c_loss.item(),
-                    'Critic/curr_steps': curr_steps,
-                    'Critic/epoch': epoch,
-                })
+					'Critic/loss': c_loss.item(),
+					'Critic/epoch': epoch,
+					'Critic/total_steps': total_steps,
+					'Critic/train_steps': critic_steps // self.log_interval,
+				})
+				
+				critic_steps += 1
 
 				self.critic_optimizer.zero_grad()
 				c_loss.backward()
 				self.critic_optimizer.step()
+
+			train_steps += max(actor_steps, critic_steps)
+			
+		return train_steps
 
 	def put_data(self, s, a, r, s_next, logprob_a, done, dw, idx):
 		self.s_hoder[idx] = s

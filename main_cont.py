@@ -61,7 +61,7 @@ def render_environment(env, model, args):
 
         total_steps = 0
         while True:
-            reward = evaluate_policy(env, model, turns=1)
+            reward = evaluate_policy(env, model, args.max_action, turns=1)
             total_steps += 1
 
             wandb.log({
@@ -130,7 +130,7 @@ def main(args):
         }
     )
 
-    traj_length, total_steps = 0, 0
+    traj_length, total_steps, train_steps = 0, 0, 0
     env_seed = args.seed
 
     try:
@@ -149,11 +149,12 @@ def main(args):
                 s_next, r, dw, tr, info = env.step(act) # dw: dead&win; tr: truncated
                 r = Reward_adapter(r)
                 done = (dw or tr)
-
-                wandb.log({
-                    "Interact/reward": r,
-                    "Interact/total_steps": total_steps,
-                })
+                
+                if total_steps % self.log_interval == 0:
+                    wandb.log({
+                        "Interact/reward": r,
+                        "Interact/total_steps": total_steps,
+                    })
 
                 '''Store the current transition'''
                 model.put_data(s, a, r, s_next, logprob_a, done, dw, idx = traj_length)
@@ -164,7 +165,7 @@ def main(args):
 
                 '''Update if its time'''
                 if traj_length % args.T_horizon == 0:
-                    model.train(total_steps)
+                    train_steps = model.train(total_steps, train_steps)
                     traj_length = 0
 
                 '''Record & log'''
@@ -210,6 +211,7 @@ if __name__ == '__main__':
     parser.add_argument('--Max_train_steps', type=int, default=int(5e7), help='Max training steps')
     parser.add_argument('--save_interval', type=int, default=int(1e5), help='Model saving interval, in steps.')
     parser.add_argument('--eval_interval', type=int, default=int(5e3), help='Model evaluating interval, in steps.')
+    parser.add_argument('--log_interval', type=int, default=int(5e3), help='Model evaluating interval, in steps.')
 
     parser.add_argument('--gamma', type=float, default=0.99, help='Discounted Factor')
     parser.add_argument('--lambd', type=float, default=0.95, help='GAE Factor')
