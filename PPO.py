@@ -8,7 +8,7 @@ import wandb
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.distributions import Categorical
+from torch.distributions import MultivariateNormal, Categorical
 
 
 class Actor(nn.Module):
@@ -19,7 +19,7 @@ class Actor(nn.Module):
         self.device = device
 
         if self.continuous:
-            self.action_dim = aciton_dim
+            self.action_dim = action_dim
             self.action_var = torch.full((self.action_dim,), action_std_init * action_std_init).to(self.device) 
 
         self.l1 = nn.Linear(state_dim, hidden_size)
@@ -48,12 +48,10 @@ class Actor(nn.Module):
         # x = F.tanh(self.l2(x) if len(x.shape) == 1 else self.norm2(self.l2(x)))
         # x = F.tanh(self.norm2(self.l2(x).unsqueeze(dim=0)).squeeze(dim=0) if len(x.shape) == 1 else self.norm2(self.l2(x)))
         
-        if self.continuous:
-            x = F.tanh(self.l3(x))
-        else:
-            x = F.softmax(self.l3(x), dim=softmax_dim)
+        x = F.tanh(self.l3(x)) if self.continuous else F.softmax(self.l3(x), dim=softmax_dim)
         
-        return x 
+        return x
+
 
 class Critic(nn.Module):
     def __init__(self, state_dim, hidden_size):
@@ -82,8 +80,9 @@ class Critic(nn.Module):
         # x = F.relu(self.l2(x) if len(x.shape) == 1 else self.norm2(self.l2(x)))
         # x = F.relu(self.norm2(self.l2(x).unsqueeze(dim=0)).squeeze(dim=0) if len(x.shape) == 1 else self.norm2(self.l2(x)))
 
-        v = self.l3(x)
-        return v
+        x = self.l3(x)
+
+        return x
 
 
 class PPO:
@@ -140,7 +139,14 @@ class PPO:
                 
                 cov_mat = torch.diag(self.actor.action_var).unsqueeze(dim=0)
                 dist = MultivariateNormal(action_mean, cov_mat)
-
+                
+                action = dist.sample()
+                action_logprob = dist.log_prob(action)
+                
+                # action = action.item()
+                action = action.detach().cpu().numpy().flatten()
+                action_prob = torch.exp(action_logprob).exp().item()
+                
             else:
                 prob = self.actor(state, softmax_dim=0)
 
@@ -150,45 +156,45 @@ class PPO:
 
                 dist = Categorical(prob)
 
-            action = dist.sample()
-
-            # action_logprob = dist.log_prob(action)
-            action_prob = prob[action]
-
+                action = dist.sample().item()
+                # action_logprob = dist.log_prob(action)
+                action_prob = prob[action].item()
+                
             # state_val = self.critic(state)
 
         # return action.item(), action_logprob.item()     #, state_val.item()
-        return action.item(), action_prob.item()        #, state_val.item()
+        return action, action_prob
 
 
     def evaluate(self, state, action):
         if self.continuous:
             action_mean = self.actor(state)
             
-            action_var = self.action_var.expand_as(action_mean)
-            cov_mat = torch.diag_embed(action_var).to(device)
+            action_var = self.actor.action_var.expand_as(action_mean)
+            cov_mat = torch.diag_embed(action_var).to(self.device)
             dist = MultivariateNormal(action_mean, cov_mat)
-
+        
+            action_logprob = dist.log_prob(action)
+            action_prob = torch.exp(action_logprob).unsqueeze(dim=-1)
+            
             # For Single Action Environments.
             if self.action_dim == 1:
                 action = action.reshape(-1, self.action_dim)
-
+            
         else:
-            prob = self.actor(state)
+            prob = self.actor(state, softmax_dim=-1)
             dist = Categorical(prob)
-
-        # action_logprob = dist.log_prob(action)
-        # action_prob = torch.exp(action_logprob)
-        # action_prob = prob[action]
-        action_prob = prob.gather(1, action)
-
+        
+            # action_prob = prob[action]
+            action_prob = prob.gather(1, action)
+            
         # dist_entropy = dist.entropy()
         dist_entropy = dist.entropy().sum(0, keepdim=True)
 
         # state_value = self.critic(state)
 
         # return action_logprob, dist_entropy     #, state_value
-        return action_prob, dist_entropy        #, state_value
+        return action_prob, dist_entropy
 
 
     # def store_transition(self, state, action, reward, obs, action_logprob, done, end, idx):
