@@ -35,18 +35,16 @@ class Actor(nn.Module):
     def set_action_std(self, new_action_std):
         self.action_var = torch.full((self.action_dim,), new_action_std * new_action_std).to(self.device)
 
-    def forward(self, state, softmax_dim = 0):
+    def forward(self, state, softmax_dim = -1):
         # if len(state.shape) == 1:
         #     state = state.unsqueeze(0)
         #     # state = state[None, :]
 
         x = F.tanh(self.l1(state))
         # x = F.tanh(self.l1(state) if len(state.shape) == 1 else self.norm1(self.l1(state)))
-        # x = F.tanh(self.norm1(self.l1(state).unsqueeze(dim=0)).squeeze(dim=0) if len(state.shape) == 1 else self.norm1(self.l1(state)))
         
         x = F.tanh(self.l2(x))
         # x = F.tanh(self.l2(x) if len(x.shape) == 1 else self.norm2(self.l2(x)))
-        # x = F.tanh(self.norm2(self.l2(x).unsqueeze(dim=0)).squeeze(dim=0) if len(x.shape) == 1 else self.norm2(self.l2(x)))
         
         x = F.tanh(self.l3(x)) if self.continuous else F.softmax(self.l3(x), dim=softmax_dim)
         
@@ -74,11 +72,9 @@ class Critic(nn.Module):
         
         x = F.relu(self.l1(state))
         # x = F.relu(self.l1(state) if len(state.shape) == 1 else self.norm1(self.l1(state)))
-        # x = F.relu(self.norm1(self.l1(state).unsqueeze(dim=0)).squeeze(dim=0) if len(state.shape) == 1 else self.norm1(self.l1(state)))
 
         x = F.relu(self.l2(x))
         # x = F.relu(self.l2(x) if len(x.shape) == 1 else self.norm2(self.l2(x)))
-        # x = F.relu(self.norm2(self.l2(x).unsqueeze(dim=0)).squeeze(dim=0) if len(x.shape) == 1 else self.norm2(self.l2(x)))
 
         x = self.l3(x)
 
@@ -101,7 +97,6 @@ class PPO:
         self.obs = np.zeros((self.T_horizon, self.state_dim), dtype=np.float32)
 
         self.action = np.zeros((self.T_horizon, 1), dtype=np.int64)
-        # self.action_logprob = np.zeros((self.T_horizon, 1), dtype=np.float32)
         self.action_old_prob = np.zeros((self.T_horizon, 1), dtype=np.float32)
 
         self.reward = np.zeros((self.T_horizon, 1), dtype=np.float32)
@@ -134,8 +129,8 @@ class PPO:
             if self.continuous:
                 action_mean = self.actor(state)
                 
-                # if deterministic:
-                #     return action_mean, None
+                if deterministic:
+                    return action_mean.detach().cpu().numpy().flatten(), None
                 
                 cov_mat = torch.diag(self.actor.action_var).unsqueeze(dim=0)
                 dist = MultivariateNormal(action_mean, cov_mat)
@@ -143,26 +138,22 @@ class PPO:
                 action = dist.sample()
                 action_logprob = dist.log_prob(action)
                 
-                # action = action.item()
                 action = action.detach().cpu().numpy().flatten()
                 action_prob = torch.exp(action_logprob).exp().item()
                 
             else:
-                prob = self.actor(state, softmax_dim=0)
+                prob = self.actor(state, softmax_dim=-1)
 
                 if deterministic:
-                    action = torch.argmax(prob).item()
+                    action = prob.argmax(dim=-1).item()
                     return action, None
 
                 dist = Categorical(prob)
 
-                action = dist.sample().item()
+                action = dist.sample()
                 # action_logprob = dist.log_prob(action)
-                action_prob = prob[action].item()
-                
-            # state_val = self.critic(state)
+                action_prob = prob.gather(-1, action)
 
-        # return action.item(), action_logprob.item()     #, state_val.item()
         return action, action_prob
 
 
@@ -185,32 +176,27 @@ class PPO:
             prob = self.actor(state, softmax_dim=-1)
             dist = Categorical(prob)
         
-            # action_prob = prob[action]
-            action_prob = prob.gather(1, action)
+            # action_logprob = dist.log_prob(action)
+            action_prob = prob.gather(-1, action)
             
-        # dist_entropy = dist.entropy()
-        dist_entropy = dist.entropy().sum(0, keepdim=True)
+        dist_entropy = dist.entropy()
+        # dist_entropy = dist.entropy().sum(0, keepdim=True)
 
-        # state_value = self.critic(state)
-
-        # return action_logprob, dist_entropy     #, state_value
         return action_prob, dist_entropy
 
 
-    # def store_transition(self, state, action, reward, obs, action_logprob, done, end, idx):
     def store_transition(self, state, action, reward, obs, action_old_prob, done, end, idx):
         self.state[idx] = state
         self.action[idx] = action
         self.reward[idx] = reward
         self.obs[idx] = obs
 
-        # self.action_logprob[idx] = action_logprob
         self.action_old_prob[idx] = action_old_prob
         self.done[idx] = done
         self.end[idx] = end
    
 
-    def train(self):
+    def train(self, curr_steps=0):
         # Exploring decay
         self.entropy_coef *= self.entropy_coef_decay 
 
@@ -219,7 +205,6 @@ class PPO:
         obs = torch.from_numpy(self.obs).to(self.device)
 
         action = torch.from_numpy(self.action).to(self.device)
-        # action_logprob = torch.from_numpy(self.action_logprob).to(self.device)
         action_old_prob = torch.from_numpy(self.action_old_prob).to(self.device)
 
         reward = torch.from_numpy(self.reward).to(self.device)
@@ -260,8 +245,6 @@ class PPO:
             np.random.shuffle(permutation)
             permutation = torch.LongTensor(permutation).to(self.device)
 
-            # state, action, td_target, advantage, action_logprob = \
-            #     state[permutation].clone(), action[permutation].clone(), td_target[permutation].clone(), advantage[permutation].clone(), action_logprob[permutation].clone()
             state, action, td_target, advantage, action_old_prob = \
                 state[permutation].clone(), action[permutation].clone(), td_target[permutation].clone(), advantage[permutation].clone(), action_old_prob[permutation].clone()
             
@@ -271,7 +254,6 @@ class PPO:
                 
                 action_prob, entropy = self.evaluate(state[index], action[index])
 
-                # ratio = torch.exp(torch.log(prob_action) - action_logprob[index])             
                 ratio = torch.exp(torch.log(action_prob) - torch.log(action_old_prob[index]))  # a/b == exp(log(a)-log(b))
                     
                 # Clipped surrogate objective
@@ -283,6 +265,12 @@ class PPO:
 
                 actor_loss = -torch.min(surr1, surr2) - self.entropy_coef * entropy
                 actor_loss = actor_loss.mean()
+
+                wandb.log({
+                    'Actor/loss': actor_loss,
+                    'Actor/curr_steps': curr_steps,
+                    'Actor/epoch': epoch,
+                })
                 
                 actor_loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 40) # Gradient Clipping
@@ -293,6 +281,12 @@ class PPO:
 
                 critic_loss = (self.critic(state[index]) - td_target[index]).pow(2)
                 critic_loss = critic_loss.mean()
+                
+                wandb.log({
+                    'Critic/loss': critic_loss,
+                    'Critic/curr_steps': curr_steps,
+                    'Critic/epoch': epoch,
+                })
                 
                 # # Regularization term
                 # for name, param in self.critic.named_parameters():

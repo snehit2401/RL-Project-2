@@ -25,7 +25,6 @@ def evaluate_policy(env, model, turns=3):
         end = False
         while not end:
             # Take deterministic actions at test time
-            # action, action_logprob = model.select_action(state, deterministic=True)
             action, action_prob = model.select_action(state, deterministic=True)
             obs, reward, done, truncated, info = env.step(action)
 
@@ -75,6 +74,7 @@ def _set_reproducable(seed=0):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed) # safe to call when cuda not available
 
     torch.use_deterministic_algorithms(True)
     torch.backends.cudnn.benchmark = False
@@ -88,11 +88,6 @@ def main(args):
 
     env = gym.make(args.env, render_mode = "human" if args.render else None)
     eval_env = gym.make(args.env)
-
-    # print(f'env.observation_space: {env.observation_space}')
-    # print(f'env.action_space: {env.action_space}')
-    # print(f'env.action_space.n: {env.action_space.n}')
-    # print(f'env._max_episode_steps: {env._max_episode_steps}')
 
     args.state_dim = env.observation_space.shape[0]
     args.action_dim = env.action_space.shape[0] if args.continuous else env.action_space.n 
@@ -162,7 +157,6 @@ def main(args):
             end = False
             while not end:
                 ## Iteracting with Environment
-                # action, action_logprob = model.select_action(state, deterministic=False) # use stochastic when training
                 action, action_prob = model.select_action(state, deterministic=False) # use stochastic when training
                 obs, reward, done, truncated, info = env.step(action)
                 end = (done or truncated)
@@ -172,7 +166,6 @@ def main(args):
                     "Interact/total_steps": total_steps,
                 })
 
-                # model.store_transition(state, action, reward, obs, action_logprob, done, end, idx = traj_length)
                 model.store_transition(state, action, reward, obs, action_prob, done, end, idx = traj_length)
                 state = obs 
 
@@ -181,7 +174,7 @@ def main(args):
 
                 # Train
                 if traj_length % args.T_horizon == 0:
-                    model.train()
+                    model.train(total_steps)
                     traj_length = 0
                 
                 if args.continuous and (total_steps % args.action_std_decay_freq == 0):
@@ -258,7 +251,7 @@ if __name__ == '__main__':
     parser.add_argument('--entropy_coef', type=float, default=0, help='Entropy coefficient of Actor')
     parser.add_argument('--entropy_coef_decay', type=float, default=0.99, help='Decay rate of entropy_coef')
 
-    # parser.add_argument('--l2_reg', type=float, default=0, help='L2 regulization coefficient for Critic')
+    # parser.add_argument('--l2_reg', type=float, default=1e-2, help='L2 regulization coefficient for Critic') # 0, 1e-2
     # parser.add_argument('--advantage_normalization', help='Advantage normalization', action='store_true')
 
     args = parser.parse_args()
